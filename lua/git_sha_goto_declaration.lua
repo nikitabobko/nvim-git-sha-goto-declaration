@@ -68,19 +68,13 @@ function M.goto_declaration()
   end
 
   local cwd = buffer_cwd()
-  local resolved, rc = git(cwd, { "rev-parse", "--verify", "--quiet", sha .. "^{commit}" })
-  if rc ~= 0 or not resolved[1] or resolved[1] == "" then
+  local format = "commit %H%d%nParent: %P%nAuthor: %an <%ae>%nDate:   %ad%n%n%w(0,4,4)%B"
+  local output, show_rc = git(cwd, { "show", "--format=" .. format, "--stat", "-p", "--no-color", sha .. "^{commit}" })
+  if show_rc ~= 0 then
     vim.notify("git-sha-goto-declaration: not a valid commit: " .. sha, vim.log.levels.WARN)
     return
   end
-  local full_sha = resolved[1]
-
-  local format = "commit %H%d%nParent: %P%nAuthor: %an <%ae>%nDate:   %ad%n%n%w(0,4,4)%B"
-  local output, show_rc = git(cwd, { "show", "--format=" .. format, "--stat", "-p", "--no-color", full_sha })
-  if show_rc ~= 0 then
-    vim.notify("git-sha-goto-declaration: git show failed for " .. full_sha, vim.log.levels.ERROR)
-    return
-  end
+  local full_sha = (output[1] or ""):match("^commit (%x+)") or sha
 
   for _, win in ipairs(vim.api.nvim_list_wins()) do
     local b = vim.api.nvim_win_get_buf(win)
