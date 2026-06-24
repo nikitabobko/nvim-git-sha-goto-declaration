@@ -111,6 +111,25 @@ assert_match "happy: vertical split (same row)"       "$out" '^SAME_ROW true$'
 assert_match "happy: vertical split (show on right)"  "$out" '^SHOW_RIGHT_OF_TODO true$'
 
 # --------------------------------------------------------------------------- #
+echo "== <CR> on a SHA opens split (same behavior as gd)"
+# --------------------------------------------------------------------------- #
+cat > "$tmp/t.lua" <<'EOF'
+vim.cmd("edit rebase-todo")
+vim.cmd("set ft=gitrebase")
+vim.api.nvim_win_set_cursor(0, {1, 5})
+vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "x", false)
+print("LINES_BEGIN")
+for _, l in ipairs(vim.api.nvim_buf_get_lines(0, 0, 5, false)) do print(l) end
+print("LINES_END")
+print("WINCOUNT " .. #vim.api.nvim_list_wins())
+print("BUFNAME " .. vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":t"))
+EOF
+out=$(run_nvim "$repo" "$tmp/t.lua")
+assert_match "cr: commit header"     "$out" '^commit [0-9a-f]{40}'
+assert_match "cr: window count is 2" "$out" '^WINCOUNT 2$'
+assert_match "cr: buffer named"      "$out" '^BUFNAME git show [0-9a-f]{12}$'
+
+# --------------------------------------------------------------------------- #
 echo "== no SHA under cursor: warns, no split opens"
 # --------------------------------------------------------------------------- #
 cat > "$tmp/t.lua" <<'EOF'
@@ -249,21 +268,24 @@ out=$(run_nvim "$repo" "$tmp/t.lua")
 assert_match    "q: maps to close"       "$out" '^QRHS <[Cc]md>close<[Cc][Rr]>$'
 
 # --------------------------------------------------------------------------- #
-echo "== gd is mapped in gitrebase / gitcommit / git filetypes"
+echo "== gd and <CR> are mapped in gitrebase / gitcommit / git filetypes"
 # --------------------------------------------------------------------------- #
 for ft in gitrebase gitcommit git; do
   cat > "$tmp/t.lua" <<EOF
 vim.cmd("enew")
 vim.bo.filetype = "$ft"
 vim.cmd("doautocmd FileType $ft")
-local found = false
+local gd_found, cr_found = false, false
 for _, m in ipairs(vim.api.nvim_buf_get_keymap(0, "n")) do
-  if m.lhs == "gd" then found = true end
+  if m.lhs == "gd" then gd_found = true end
+  if m.lhs == "<CR>" then cr_found = true end
 end
-print("GDMAP " .. tostring(found))
+print("GDMAP " .. tostring(gd_found))
+print("CRMAP " .. tostring(cr_found))
 EOF
   out=$(run_nvim "$repo" "$tmp/t.lua")
   assert_match  "ft $ft: gd is mapped"   "$out" '^GDMAP true$'
+  assert_match  "ft $ft: <CR> is mapped" "$out" '^CRMAP true$'
 done
 
 # --------------------------------------------------------------------------- #
@@ -278,15 +300,18 @@ printf 'pick %s second\n' "$sha" > "$seq_repo/.git/sequencer/todo"
 cat > "$tmp/t.lua" <<'EOF'
 vim.cmd("edit .git/sequencer/todo")
 print("FILETYPE " .. vim.bo.filetype)
-local found = false
+local gd_found, cr_found = false, false
 for _, m in ipairs(vim.api.nvim_buf_get_keymap(0, "n")) do
-  if m.lhs == "gd" then found = true end
+  if m.lhs == "gd" then gd_found = true end
+  if m.lhs == "<CR>" then cr_found = true end
 end
-print("GDMAP " .. tostring(found))
+print("GDMAP " .. tostring(gd_found))
+print("CRMAP " .. tostring(cr_found))
 EOF
 out=$(run_nvim "$seq_repo" "$tmp/t.lua")
 assert_match    "sequencer: filetype gitrebase" "$out" '^FILETYPE gitrebase$'
 assert_match    "sequencer: gd mapped"          "$out" '^GDMAP true$'
+assert_match    "sequencer: <CR> mapped"        "$out" '^CRMAP true$'
 
 # --------------------------------------------------------------------------- #
 echo "== root commit (no parent): shows blank parent, does not crash"

@@ -108,11 +108,9 @@ function M.goto_declaration()
 end
 
 function M.attach()
-  vim.keymap.set("n", "gd", M.goto_declaration, {
-    buffer = true,
-    silent = true,
-    desc = "Goto declaration (git SHA)",
-  })
+  local opts = { buffer = true, silent = true, desc = "Goto declaration (git SHA)" }
+  vim.keymap.set("n", "gd", M.goto_declaration, opts)
+  vim.keymap.set("n", "<CR>", M.goto_declaration, opts)
 end
 
 return M

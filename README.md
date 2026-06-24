@@ -14,10 +14,10 @@ Use whatever is your package manager
 
 ## Behavior
 
-Pressing `gd` in a supported buffer:
+Pressing `gd` (or `<CR>`) in a supported buffer:
 
 1. Runs `git show --stat -p` and shows the output in a right-hand vertical split.
-2. `q` closes the split. `gd` works again inside it, so you can chase parent commits from the diff.
+2. `q` closes the split. `gd` / `<CR>` work again inside it, so you can chase parent commits from the diff.
 
 ## Supported filetypes
 
@@ -48,7 +48,7 @@ The plugin is small enough to fork rather than configure, but the public API is:
 ```lua
 local g = require("git_sha_goto_declaration")
 g.goto_declaration()  -- run the lookup from the current cursor position
-g.attach()            -- bind `gd` in the current buffer
+g.attach()            -- bind `gd` and `<CR>` in the current buffer
 ```
 
 To use a horizontal split instead of a vertical one, change `botright vnew` to
