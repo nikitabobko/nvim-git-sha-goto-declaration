@@ -75,7 +75,8 @@ function M.goto_declaration()
   end
   local full_sha = resolved[1]
 
-  local output, show_rc = git(cwd, { "show", "--stat", "-p", "--no-color", full_sha })
+  local format = "commit %H%d%nParent: %P%nAuthor: %an <%ae>%nDate:   %ad%n%n%w(0,4,4)%B"
+  local output, show_rc = git(cwd, { "show", "--format=" .. format, "--stat", "-p", "--no-color", full_sha })
   if show_rc ~= 0 then
     vim.notify("git-sha-goto-declaration: git show failed for " .. full_sha, vim.log.levels.ERROR)
     return
