@@ -81,6 +81,14 @@ function M.goto_declaration()
     return
   end
 
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    local b = vim.api.nvim_win_get_buf(win)
+    local ok, marked = pcall(vim.api.nvim_buf_get_var, b, "git_sha_show_buffer")
+    if ok and marked then
+      pcall(vim.api.nvim_win_close, win, true)
+    end
+  end
+
   vim.cmd("botright new")
   local buf = vim.api.nvim_get_current_buf()
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, output)
@@ -90,6 +98,7 @@ function M.goto_declaration()
   vim.bo[buf].swapfile = false
   vim.bo[buf].filetype = "git"
   vim.b[buf].git_sha_cwd = cwd
+  vim.b[buf].git_sha_show_buffer = true
   pcall(vim.api.nvim_buf_set_name, buf, "git show " .. full_sha:sub(1, 12))
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
 
