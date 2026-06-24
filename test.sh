@@ -79,6 +79,7 @@ printf 'pick %s second\npick %s third\n' "$sha2" "$sha3" > "$repo/rebase-todo"
 cat > "$tmp/t.lua" <<'EOF'
 vim.cmd("edit rebase-todo")
 vim.cmd("set ft=gitrebase")
+local todo_win = vim.api.nvim_get_current_win()
 vim.api.nvim_win_set_cursor(0, {1, 5})
 require('git_sha_goto_declaration').goto_declaration()
 print("LINES_BEGIN")
@@ -88,6 +89,15 @@ print("WINCOUNT " .. #vim.api.nvim_list_wins())
 print("MODIFIABLE " .. tostring(vim.bo.modifiable))
 print("FILETYPE " .. vim.bo.filetype)
 print("BUFNAME " .. vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":t"))
+-- Vertical split: the show window must sit to the right of the original (col > 0,
+-- same row), and the two windows must share the full height (== &lines - cmdheight - statusline).
+local show_win = vim.api.nvim_get_current_win()
+local todo_pos = vim.api.nvim_win_get_position(todo_win)
+local show_pos = vim.api.nvim_win_get_position(show_win)
+print("TODO_POS " .. todo_pos[1] .. "," .. todo_pos[2])
+print("SHOW_POS " .. show_pos[1] .. "," .. show_pos[2])
+print("SAME_ROW " .. tostring(todo_pos[1] == show_pos[1]))
+print("SHOW_RIGHT_OF_TODO " .. tostring(show_pos[2] > todo_pos[2]))
 EOF
 out=$(run_nvim "$repo" "$tmp/t.lua")
 assert_match "happy: commit header"      "$out" '^commit [0-9a-f]{40}'
@@ -97,6 +107,8 @@ assert_match "happy: window count is 2"  "$out" '^WINCOUNT 2$'
 assert_match "happy: buffer not modifiable" "$out" '^MODIFIABLE false$'
 assert_match "happy: filetype is git"    "$out" '^FILETYPE git$'
 assert_match "happy: buffer named"       "$out" '^BUFNAME git show [0-9a-f]{12}$'
+assert_match "happy: vertical split (same row)"       "$out" '^SAME_ROW true$'
+assert_match "happy: vertical split (show on right)"  "$out" '^SHOW_RIGHT_OF_TODO true$'
 
 # --------------------------------------------------------------------------- #
 echo "== no SHA under cursor: warns, no split opens"

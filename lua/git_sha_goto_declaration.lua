@@ -89,7 +89,7 @@ function M.goto_declaration()
   if show_win then
     vim.api.nvim_set_current_win(show_win)
   else
-    vim.cmd("botright new")
+    vim.cmd("botright vnew")
     buf = vim.api.nvim_get_current_buf()
     vim.bo[buf].buftype = "nofile"
     vim.bo[buf].bufhidden = "wipe"

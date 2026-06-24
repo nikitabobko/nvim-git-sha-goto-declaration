@@ -16,7 +16,7 @@ Use whatever is your package manager
 
 Pressing `gd` in a supported buffer:
 
-1. Runs `git show --stat -p` and shows the output in a bottom horizontal split.
+1. Runs `git show --stat -p` and shows the output in a right-hand vertical split.
 2. `q` closes the split. `gd` works again inside it, so you can chase parent commits from the diff.
 
 ## Supported filetypes
@@ -51,8 +51,8 @@ g.goto_declaration()  -- run the lookup from the current cursor position
 g.attach()            -- bind `gd` in the current buffer
 ```
 
-To use a vertical split instead of a horizontal one, change `botright new` to
-`botright vnew` in `lua/git_sha_goto_declaration.lua`.
+To use a horizontal split instead of a vertical one, change `botright vnew` to
+`botright new` in `lua/git_sha_goto_declaration.lua`.
 
 To enable it in extra filetypes (e.g. `fugitive`, `diff`), drop a one-liner
 `ftplugin/<filetype>.lua` that calls `require("git_sha_goto_declaration").attach()`.
