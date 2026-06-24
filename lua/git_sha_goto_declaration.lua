@@ -76,28 +76,35 @@ function M.goto_declaration()
   end
   local full_sha = (output[1] or ""):match("^commit (%x+)") or sha
 
+  local show_win, buf
   for _, win in ipairs(vim.api.nvim_list_wins()) do
     local b = vim.api.nvim_win_get_buf(win)
     local ok, marked = pcall(vim.api.nvim_buf_get_var, b, "git_sha_show_buffer")
     if ok and marked then
-      pcall(vim.api.nvim_win_close, win, true)
+      show_win, buf = win, b
+      break
     end
   end
 
-  vim.cmd("botright new")
-  local buf = vim.api.nvim_get_current_buf()
+  if show_win then
+    vim.api.nvim_set_current_win(show_win)
+  else
+    vim.cmd("botright new")
+    buf = vim.api.nvim_get_current_buf()
+    vim.bo[buf].buftype = "nofile"
+    vim.bo[buf].bufhidden = "wipe"
+    vim.bo[buf].swapfile = false
+    vim.bo[buf].filetype = "git"
+    vim.b[buf].git_sha_show_buffer = true
+    vim.keymap.set("n", "q", "<cmd>close<cr>", { buffer = buf, silent = true, desc = "Close git show" })
+  end
+
+  vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, output)
   vim.bo[buf].modifiable = false
-  vim.bo[buf].buftype = "nofile"
-  vim.bo[buf].bufhidden = "wipe"
-  vim.bo[buf].swapfile = false
-  vim.bo[buf].filetype = "git"
   vim.b[buf].git_sha_cwd = cwd
-  vim.b[buf].git_sha_show_buffer = true
   pcall(vim.api.nvim_buf_set_name, buf, "git show " .. full_sha:sub(1, 12))
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
-
-  vim.keymap.set("n", "q", "<cmd>close<cr>", { buffer = buf, silent = true, desc = "Close git show" })
 end
 
 function M.attach()
