@@ -116,6 +116,7 @@ echo "== <CR> on a SHA opens split (same behavior as gd)"
 cat > "$tmp/t.lua" <<'EOF'
 vim.cmd("edit rebase-todo")
 vim.cmd("set ft=gitrebase")
+vim.wait(50)  -- drain attach()'s vim.schedule so <CR> is mapped before feedkeys
 vim.api.nvim_win_set_cursor(0, {1, 5})
 vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "x", false)
 print("LINES_BEGIN")
@@ -275,6 +276,7 @@ for ft in gitrebase gitcommit git; do
 vim.cmd("enew")
 vim.bo.filetype = "$ft"
 vim.cmd("doautocmd FileType $ft")
+vim.wait(50)  -- drain attach()'s vim.schedule
 local gd_found, cr_found = false, false
 for _, m in ipairs(vim.api.nvim_buf_get_keymap(0, "n")) do
   if m.lhs == "gd" then gd_found = true end
@@ -299,6 +301,7 @@ printf 'pick %s second\n' "$sha" > "$seq_repo/.git/sequencer/todo"
 
 cat > "$tmp/t.lua" <<'EOF'
 vim.cmd("edit .git/sequencer/todo")
+vim.wait(50)  -- drain attach()'s vim.schedule
 print("FILETYPE " .. vim.bo.filetype)
 local gd_found, cr_found = false, false
 for _, m in ipairs(vim.api.nvim_buf_get_keymap(0, "n")) do
@@ -331,6 +334,71 @@ EOF
 out=$(run_nvim "$repo" "$tmp/t.lua")
 assert_match    "root: commit header"    "$out" "^commit $root_full"
 assert_match    "root: empty parent line" "$out" '^Parent: $'
+
+# --------------------------------------------------------------------------- #
+echo "== fugitive: b:fugitive_type set -> attach is a no-op (no gd / <CR> hijack)"
+# --------------------------------------------------------------------------- #
+cat > "$tmp/t.lua" <<'EOF'
+vim.cmd("enew")
+vim.b.fugitive_type = "commit"  -- simulate a fugitive :G show buffer
+vim.bo.filetype = "git"
+vim.cmd("doautocmd FileType git")
+vim.wait(50)
+local gd_found, cr_found = false, false
+for _, m in ipairs(vim.api.nvim_buf_get_keymap(0, "n")) do
+  if m.lhs == "gd" then gd_found = true end
+  if m.lhs == "<CR>" then cr_found = true end
+end
+print("GDMAP " .. tostring(gd_found))
+print("CRMAP " .. tostring(cr_found))
+EOF
+out=$(run_nvim "$repo" "$tmp/t.lua")
+assert_match    "fugitive: gd NOT mapped"   "$out" '^GDMAP false$'
+assert_match    "fugitive: <CR> NOT mapped" "$out" '^CRMAP false$'
+
+# --------------------------------------------------------------------------- #
+echo "== guard: pre-existing buffer-local <CR> survives; gd still mapped"
+# --------------------------------------------------------------------------- #
+cat > "$tmp/t.lua" <<'EOF'
+vim.cmd("enew")
+-- Pretend another plugin has already claimed <CR> in this buffer (e.g. fugitive
+-- in a non-:G-show buffer where b:fugitive_type isn't set).
+vim.keymap.set("n", "<CR>", "<cmd>echom 'pre-existing'<cr>", { buffer = true })
+vim.bo.filetype = "git"
+vim.cmd("doautocmd FileType git")
+vim.wait(50)
+local gd_found, cr_rhs = false, ""
+for _, m in ipairs(vim.api.nvim_buf_get_keymap(0, "n")) do
+  if m.lhs == "gd" then gd_found = true end
+  if m.lhs == "<CR>" then cr_rhs = m.rhs or "" end
+end
+print("GDMAP " .. tostring(gd_found))
+print("CRRHS " .. cr_rhs)
+EOF
+out=$(run_nvim "$repo" "$tmp/t.lua")
+assert_match    "guard <CR>: gd still mapped"        "$out" '^GDMAP true$'
+assert_match    "guard <CR>: pre-existing preserved" "$out" "^CRRHS <[Cc]md>echom 'pre-existing'<[Cc][Rr]>$"
+
+# --------------------------------------------------------------------------- #
+echo "== guard: pre-existing buffer-local gd survives; <CR> still mapped"
+# --------------------------------------------------------------------------- #
+cat > "$tmp/t.lua" <<'EOF'
+vim.cmd("enew")
+vim.keymap.set("n", "gd", "<cmd>echom 'pre-existing'<cr>", { buffer = true })
+vim.bo.filetype = "git"
+vim.cmd("doautocmd FileType git")
+vim.wait(50)
+local cr_found, gd_rhs = false, ""
+for _, m in ipairs(vim.api.nvim_buf_get_keymap(0, "n")) do
+  if m.lhs == "<CR>" then cr_found = true end
+  if m.lhs == "gd" then gd_rhs = m.rhs or "" end
+end
+print("CRMAP " .. tostring(cr_found))
+print("GDRHS " .. gd_rhs)
+EOF
+out=$(run_nvim "$repo" "$tmp/t.lua")
+assert_match    "guard gd: <CR> still mapped"        "$out" '^CRMAP true$'
+assert_match    "guard gd: pre-existing preserved"   "$out" "^GDRHS <[Cc]md>echom 'pre-existing'<[Cc][Rr]>$"
 
 # --------------------------------------------------------------------------- #
 echo
