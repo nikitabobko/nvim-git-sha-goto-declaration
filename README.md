@@ -78,6 +78,7 @@ lua/git_sha_goto_declaration.lua    -- goto_declaration, handler, setup, attach
 plugin/git-sha-goto-declaration.lua -- global mappings + sequencer/todo filetype
 test.sh                             -- headless tests
 nvim.sh                             -- nvim with factory defaults + this plugin
+nvim_fugitive.sh                    -- the same, plus vim-fugitive
 ```
 
 `./nvim.sh` runs `nvim --clean` with only this plugin on the runtimepath, which
@@ -87,6 +88,19 @@ is the quickest way to tell a plugin bug from a config clash:
 ./nvim.sh some-file
 GIT_SEQUENCE_EDITOR=/path/to/nvim.sh git rebase -i HEAD~5
 ```
+
+`./nvim_fugitive.sh` is the same with vim-fugitive added, which is how you reach
+the fugitive code path -- `nvim.sh` alone always renders the commit itself,
+since `--clean` leaves fugitive out:
+
+```sh
+./nvim_fugitive.sh some-file
+FUGITIVE=~/src/vim-fugitive ./nvim_fugitive.sh some-file   # or point it yourself
+```
+
+It looks where the usual plugin managers put fugitive, and `$FUGITIVE` overrides
+that. `--print-path` reports what it found and exits, which is how `test.sh`
+decides whether to run its fugitive tests or skip them.
 
 ## Customizing
 

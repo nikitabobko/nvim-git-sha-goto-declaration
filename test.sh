@@ -33,16 +33,10 @@ run_nvim() {
   )
 }
 
-# Where vim-fugitive lives, if it is installed at all. The fugitive tests are
-# skipped rather than failed when it isn't -- the plugin works without it.
-fugitive=""
-for d in ~/.local/share/nvim/lazy/vim-fugitive \
-         ~/.local/share/nvim/plugged/vim-fugitive \
-         ~/.local/share/nvim/site/pack/*/*/vim-fugitive \
-         ~/.vim/plugged/vim-fugitive \
-         ~/.vim/pack/*/*/vim-fugitive; do
-  [[ -f "$d/plugin/fugitive.vim" ]] && { fugitive="$d"; break; }
-done
+# Where vim-fugitive lives, if it is installed at all -- nvim_fugitive.sh owns
+# that search, so the two can't drift. The fugitive tests skip rather than fail
+# when it isn't installed; the plugin works without it.
+fugitive="$("$here/nvim_fugitive.sh" --print-path)"
 
 # run_fugitive <cwd> <script> -- like run_nvim, with fugitive on the runtimepath.
 run_fugitive() {
