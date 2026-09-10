@@ -74,7 +74,7 @@ new_repo() {
 }
 
 # --------------------------------------------------------------------------- #
-echo "== happy path: gd on a SHA opens split with commit + parent header"
+echo "== happy path: gd on a SHA shows the commit in the same window"
 # --------------------------------------------------------------------------- #
 repo="$tmp/happy"
 new_repo "$repo"
@@ -86,35 +86,52 @@ cat > "$tmp/t.lua" <<'EOF'
 vim.cmd("edit rebase-todo")
 vim.cmd("set ft=gitrebase")
 local todo_win = vim.api.nvim_get_current_win()
+local todo_buf = vim.api.nvim_get_current_buf()
 vim.api.nvim_win_set_cursor(0, {1, 5})
 require('git_sha_goto_declaration').goto_declaration()
 print("LINES_BEGIN")
 for _, l in ipairs(vim.api.nvim_buf_get_lines(0, 0, 5, false)) do print(l) end
 print("LINES_END")
 print("WINCOUNT " .. #vim.api.nvim_list_wins())
+print("SAME_WIN " .. tostring(todo_win == vim.api.nvim_get_current_win()))
+print("BUF_REPLACED " .. tostring(todo_buf ~= vim.api.nvim_get_current_buf()))
 print("MODIFIABLE " .. tostring(vim.bo.modifiable))
+print("BUFTYPE " .. vim.bo.buftype)
 print("FILETYPE " .. vim.bo.filetype)
 print("BUFNAME " .. vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":t"))
--- Vertical split: the show window must sit to the right of the original (col > 0,
--- same row), and the two windows must share the full height (== &lines - cmdheight - statusline).
-local show_win = vim.api.nvim_get_current_win()
-local todo_pos = vim.api.nvim_win_get_position(todo_win)
-local show_pos = vim.api.nvim_win_get_position(show_win)
-print("TODO_POS " .. todo_pos[1] .. "," .. todo_pos[2])
-print("SHOW_POS " .. show_pos[1] .. "," .. show_pos[2])
-print("SAME_ROW " .. tostring(todo_pos[1] == show_pos[1]))
-print("SHOW_RIGHT_OF_TODO " .. tostring(show_pos[2] > todo_pos[2]))
+print("ROW " .. vim.api.nvim_win_get_cursor(0)[1])
 EOF
 out=$(run_nvim "$repo" "$tmp/t.lua")
 assert_match "happy: commit header"      "$out" '^commit [0-9a-f]{40}'
 assert_match "happy: parent header"      "$out" '^Parent: [0-9a-f]{40}'
 assert_match "happy: author header"      "$out" '^Author: '
-assert_match "happy: window count is 2"  "$out" '^WINCOUNT 2$'
+assert_match "happy: no new window"      "$out" '^WINCOUNT 1$'
+assert_match "happy: reuses the window"  "$out" '^SAME_WIN true$'
+assert_match "happy: buffer replaced"    "$out" '^BUF_REPLACED true$'
 assert_match "happy: buffer not modifiable" "$out" '^MODIFIABLE false$'
+assert_match "happy: scratch buffer"     "$out" '^BUFTYPE nofile$'
 assert_match "happy: filetype is git"    "$out" '^FILETYPE git$'
 assert_match "happy: buffer named"       "$out" '^BUFNAME git show [0-9a-f]{12}$'
-assert_match "happy: vertical split (same row)"       "$out" '^SAME_ROW true$'
-assert_match "happy: vertical split (show on right)"  "$out" '^SHOW_RIGHT_OF_TODO true$'
+assert_match "happy: cursor at the top"  "$out" '^ROW 1$'
+
+# --------------------------------------------------------------------------- #
+echo "== <C-o> goes back to where gd was pressed"
+# --------------------------------------------------------------------------- #
+cat > "$tmp/t.lua" <<'EOF'
+vim.cmd("edit rebase-todo")
+vim.cmd("set ft=gitrebase")
+vim.api.nvim_win_set_cursor(0, {2, 5})
+require('git_sha_goto_declaration').goto_declaration()
+local shown = vim.bo.filetype
+vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<C-o>", true, false, true), "x", false)
+print("SHOWN_FT " .. shown)
+print("BACK_NAME " .. vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":t"))
+print("BACK_ROW " .. vim.api.nvim_win_get_cursor(0)[1])
+EOF
+out=$(run_nvim "$repo" "$tmp/t.lua")
+assert_match "back: showed the commit"   "$out" '^SHOWN_FT git$'
+assert_match "back: returns to the todo" "$out" '^BACK_NAME rebase-todo$'
+assert_match "back: returns to the line" "$out" '^BACK_ROW 2$'
 
 # --------------------------------------------------------------------------- #
 echo "== <CR> on a SHA opens split (same behavior as gd)"
@@ -132,7 +149,7 @@ print("BUFNAME " .. vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":t"))
 EOF
 out=$(run_nvim "$repo" "$tmp/t.lua")
 assert_match "cr: commit header"     "$out" '^commit [0-9a-f]{40}'
-assert_match "cr: window count is 2" "$out" '^WINCOUNT 2$'
+assert_match "cr: no new window"     "$out" '^WINCOUNT 1$'
 assert_match "cr: buffer named"      "$out" '^BUFNAME git show [0-9a-f]{12}$'
 
 # --------------------------------------------------------------------------- #
@@ -146,11 +163,11 @@ vim.notify = function(msg, _) table.insert(notes, msg) end
 vim.api.nvim_win_set_cursor(0, {1, 0})  -- on 'p' of 'pick'
 require('git_sha_goto_declaration').goto_declaration()
 print("NOTIFY " .. (notes[1] or ""))
-print("WINCOUNT " .. #vim.api.nvim_list_wins())
+print("FILETYPE " .. vim.bo.filetype)
 EOF
 out=$(run_nvim "$repo" "$tmp/t.lua")
 assert_match    "no-sha: warns"          "$out" '^NOTIFY .*no SHA under cursor'
-assert_match    "no-sha: no split"       "$out" '^WINCOUNT 1$'
+assert_match    "no-sha: buffer untouched" "$out" '^FILETYPE gitrebase$'
 
 # --------------------------------------------------------------------------- #
 echo "== invalid SHA: warns, no split opens"
@@ -164,11 +181,11 @@ vim.notify = function(msg, _) table.insert(notes, msg) end
 vim.api.nvim_win_set_cursor(0, {1, 5})
 require('git_sha_goto_declaration').goto_declaration()
 print("NOTIFY " .. (notes[1] or ""))
-print("WINCOUNT " .. #vim.api.nvim_list_wins())
+print("FILETYPE " .. vim.bo.filetype)
 EOF
 out=$(run_nvim "$repo" "$tmp/t.lua")
 assert_match    "invalid: warns"         "$out" '^NOTIFY .*not a valid commit: deadbeef'
-assert_match    "invalid: no split"      "$out" '^WINCOUNT 1$'
+assert_match    "invalid: buffer untouched" "$out" '^FILETYPE gitrebase$'
 
 # --------------------------------------------------------------------------- #
 echo "== tree (non-commit) SHA: warns, no split opens"
@@ -184,54 +201,40 @@ vim.notify = function(msg, _) table.insert(notes, msg) end
 vim.api.nvim_win_set_cursor(0, {1, 5})
 require('git_sha_goto_declaration').goto_declaration()
 print("NOTIFY " .. (notes[1] or ""))
-print("WINCOUNT " .. #vim.api.nvim_list_wins())
+print("FILETYPE " .. vim.bo.filetype)
 EOF
 out=$(run_nvim "$repo" "$tmp/t.lua")
 assert_match    "tree: warns"            "$out" '^NOTIFY .*not a valid commit'
-assert_match    "tree: no split"         "$out" '^WINCOUNT 1$'
+assert_match    "tree: buffer untouched" "$out" '^FILETYPE gitrebase$'
 
 # --------------------------------------------------------------------------- #
-echo "== reuse: second gd swaps contents in place (same win + buffer)"
+echo "== a second gd replaces the shown commit in place"
 # --------------------------------------------------------------------------- #
 cat > "$tmp/t.lua" <<'EOF'
 vim.cmd("edit rebase-todo")
 vim.cmd("set ft=gitrebase")
-local todo_win = vim.api.nvim_get_current_win()
 
 vim.api.nvim_win_set_cursor(0, {1, 5})
 require('git_sha_goto_declaration').goto_declaration()
-local win1 = vim.api.nvim_get_current_win()
 local buf1 = vim.api.nvim_get_current_buf()
 local name1 = vim.api.nvim_buf_get_name(buf1)
 
-vim.api.nvim_set_current_win(todo_win)
+vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<C-o>", true, false, true), "x", false)
 vim.api.nvim_win_set_cursor(0, {2, 5})
 require('git_sha_goto_declaration').goto_declaration()
-local win2 = vim.api.nvim_get_current_win()
-local buf2 = vim.api.nvim_get_current_buf()
-local name2 = vim.api.nvim_buf_get_name(buf2)
+local name2 = vim.api.nvim_buf_get_name(0)
 
-print("SAME_WIN " .. tostring(win1 == win2))
-print("SAME_BUF " .. tostring(buf1 == buf2))
 print("NAME_CHANGED " .. tostring(name1 ~= name2))
 print("WINCOUNT " .. #vim.api.nvim_list_wins())
-local shows = 0
-for _, w in ipairs(vim.api.nvim_list_wins()) do
-  local b = vim.api.nvim_win_get_buf(w)
-  local ok, m = pcall(vim.api.nvim_buf_get_var, b, "git_sha_show_buffer")
-  if ok and m then shows = shows + 1 end
-end
-print("SHOWS " .. shows)
+print("OLD_WIPED " .. tostring(not vim.api.nvim_buf_is_valid(buf1)))
 EOF
 out=$(run_nvim "$repo" "$tmp/t.lua")
-assert_match    "reuse: same window"     "$out" '^SAME_WIN true$'
-assert_match    "reuse: same buffer"     "$out" '^SAME_BUF true$'
-assert_match    "reuse: name changed"    "$out" '^NAME_CHANGED true$'
-assert_match    "reuse: 2 windows total" "$out" '^WINCOUNT 2$'
-assert_match    "reuse: 1 show buffer"   "$out" '^SHOWS 1$'
+assert_match    "second gd: shows another commit" "$out" '^NAME_CHANGED true$'
+assert_match    "second gd: still one window"     "$out" '^WINCOUNT 1$'
+assert_match    "second gd: old buffer wiped"     "$out" '^OLD_WIPED true$'
 
 # --------------------------------------------------------------------------- #
-echo "== chase: gd inside the show split jumps to the parent commit"
+echo "== chase: gd on the Parent: line jumps to the parent commit"
 # --------------------------------------------------------------------------- #
 parent_full=$(git -C "$repo" rev-parse HEAD~2)
 cat > "$tmp/t.lua" <<'EOF'
@@ -257,7 +260,7 @@ assert_match    "chase: found parent line" "$out" '^PLINE 2$'
 assert_match    "chase: shows parent commit" "$out" "^FIRST commit $parent_full"
 
 # --------------------------------------------------------------------------- #
-echo "== q is mapped to close the show split"
+echo "== q is mapped to go back"
 # --------------------------------------------------------------------------- #
 cat > "$tmp/t.lua" <<'EOF'
 vim.cmd("edit rebase-todo")
@@ -271,7 +274,7 @@ end
 print("QRHS " .. rhs)
 EOF
 out=$(run_nvim "$repo" "$tmp/t.lua")
-assert_match    "q: maps to close"       "$out" '^QRHS <[Cc]md>close<[Cc][Rr]>$'
+assert_match    "q: maps to <C-o>"      "$out" '^QRHS <C-[Oo]>$'
 
 # --------------------------------------------------------------------------- #
 echo "== gd and <CR> are mapped globally, not per filetype"
@@ -306,7 +309,7 @@ EOF
 out=$(run_nvim "$repo" "$tmp/t.lua")
 assert_match    "any buffer: source is markdown" "$out" '^SRC_FILETYPE markdown$'
 assert_match    "any buffer: commit header"   "$out" '^FIRST commit [0-9a-f]{40}'
-assert_match    "any buffer: split opened"    "$out" '^WINCOUNT 2$'
+assert_match    "any buffer: no new window"   "$out" '^WINCOUNT 1$'
 assert_match    "any buffer: show ft is git"  "$out" '^FILETYPE git$'
 
 # --------------------------------------------------------------------------- #
@@ -322,7 +325,7 @@ print("WINCOUNT " .. #vim.api.nvim_list_wins())
 EOF
 out=$(run_nvim "$repo" "$tmp/t.lua")
 assert_match    "fallback gd: jumped to declaration" "$out" '^LINE 2$'
-assert_match    "fallback gd: no split"              "$out" '^WINCOUNT 1$'
+assert_match    "fallback gd: nothing shown"         "$out" '^WINCOUNT 1$'
 
 # --------------------------------------------------------------------------- #
 echo "== fallback: <CR> on a non-SHA line keeps its built-in meaning"
@@ -336,7 +339,7 @@ print("WINCOUNT " .. #vim.api.nvim_list_wins())
 EOF
 out=$(run_nvim "$repo" "$tmp/t.lua")
 assert_match    "fallback <CR>: moved down" "$out" '^LINE 2$'
-assert_match    "fallback <CR>: no split"   "$out" '^WINCOUNT 1$'
+assert_match    "fallback <CR>: nothing shown" "$out" '^WINCOUNT 1$'
 
 # --------------------------------------------------------------------------- #
 echo "== short hex words (< 7 chars) are not treated as SHAs"
@@ -356,7 +359,7 @@ EOF
 out=$(run_nvim "$repo" "$tmp/t.lua")
 assert_match    "short hex: not a SHA"       "$out" '^NOTIFY .*no SHA under cursor'
 assert_match    "short hex: gd falls back"   "$out" '^LINE 2$'
-assert_match    "short hex: no split"        "$out" '^WINCOUNT 1$'
+assert_match    "short hex: nothing shown"   "$out" '^WINCOUNT 1$'
 
 # --------------------------------------------------------------------------- #
 echo "== outside a git repo: gd falls back instead of erroring"
@@ -373,7 +376,7 @@ print("WINCOUNT " .. #vim.api.nvim_list_wins())
 EOF
 out=$(run_nvim "$bare" "$tmp/t.lua")
 assert_match    "no repo: gd falls back" "$out" '^LINE 2$'
-assert_match    "no repo: no split"      "$out" '^WINCOUNT 1$'
+assert_match    "no repo: nothing shown" "$out" '^WINCOUNT 1$'
 
 # --------------------------------------------------------------------------- #
 echo "== a global gd from the user's config is not hijacked"
@@ -404,10 +407,10 @@ vim.cmd("set ft=gitrebase")
 vim.keymap.set("n", "<CR>", "<cmd>echom 'other plugin'<cr>", { buffer = true })
 vim.api.nvim_win_set_cursor(0, {1, 5})
 vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "x", false)
-print("WINCOUNT " .. #vim.api.nvim_list_wins())
+print("FILETYPE " .. vim.bo.filetype)
 EOF
 out=$(run_nvim "$repo" "$tmp/t.lua")
-assert_match    "buffer-local wins: no split" "$out" '^WINCOUNT 1$'
+assert_match    "buffer-local wins: buffer untouched" "$out" '^FILETYPE gitrebase$'
 
 # --------------------------------------------------------------------------- #
 echo "== .git/sequencer/todo is auto-detected as gitrebase"

@@ -17,10 +17,14 @@ Use whatever is your package manager
 `gd` (and `<CR>`) in normal mode:
 
 1. If the word under the cursor is a git SHA (7-40 hex chars) that resolves to a
-   commit, run `git show --stat -p` and show the output in a right-hand vertical
-   split. `q` closes the split. `gd` / `<CR>` work again inside it, so you can
-   chase parent commits from the diff.
+   commit, run `git show --stat -p` and show the output in the current window,
+   like any other goto-definition. `<C-o>` (or `q`) goes back.
+   `gd` / `<CR>` work inside the diff too, so you can chase parent commits.
 2. Otherwise the built-in `gd` / `<CR>` runs instead, unchanged.
+
+The diff lives in a throwaway scratch buffer that is wiped as soon as you leave
+it, so it never piles up in your buffer list (which also means `<C-i>` won't
+bring it back — press `gd` again).
 
 The repository is picked from the directory of the current buffer's file, so
 this works across repos in one Neovim session.
@@ -59,9 +63,9 @@ g.setup()             -- map gd / <CR> globally (already called by plugin/)
 g.attach()            -- map gd / <CR> buffer-locally in the current buffer
 ```
 
-To use a horizontal split instead of a vertical one, change `botright vnew` to
-`botright new` in `lua/git_sha_goto_declaration.lua`. The minimum SHA length is
-`MIN_SHA_LEN` in the same file.
+To open the diff in a split instead of the current window, add a `vim.cmd("vsplit")`
+before `nvim_win_set_buf` in `lua/git_sha_goto_declaration.lua`. The minimum SHA
+length is `MIN_SHA_LEN` in the same file.
 
 ## Code quality
 

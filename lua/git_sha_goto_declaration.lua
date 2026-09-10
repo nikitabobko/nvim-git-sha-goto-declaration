@@ -77,34 +77,17 @@ local function try_goto()
   if show_rc ~= 0 then return "not a valid commit: " .. sha end
   local full_sha = (output[1] or ""):match("^commit (%x+)") or sha
 
-  local show_win, buf
-  for _, win in ipairs(vim.api.nvim_list_wins()) do
-    local b = vim.api.nvim_win_get_buf(win)
-    local ok, marked = pcall(vim.api.nvim_buf_get_var, b, "git_sha_show_buffer")
-    if ok and marked then
-      show_win, buf = win, b
-      break
-    end
-  end
-
-  if show_win then
-    vim.api.nvim_set_current_win(show_win)
-  else
-    vim.cmd("botright vnew")
-    buf = vim.api.nvim_get_current_buf()
-    vim.bo[buf].buftype = "nofile"
-    vim.bo[buf].bufhidden = "wipe"
-    vim.bo[buf].swapfile = false
-    vim.bo[buf].filetype = "git"
-    vim.b[buf].git_sha_show_buffer = true
-    vim.keymap.set("n", "q", "<cmd>close<cr>", { buffer = buf, silent = true, desc = "Close git show" })
-  end
-
-  vim.bo[buf].modifiable = true
+  local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, output)
   vim.bo[buf].modifiable = false
+  vim.bo[buf].bufhidden = "wipe"
+  vim.bo[buf].filetype = "git"
   vim.b[buf].git_sha_cwd = cwd
   pcall(vim.api.nvim_buf_set_name, buf, "git show " .. full_sha:sub(1, 12))
+  vim.keymap.set("n", "q", "<C-o>", { buffer = buf, silent = true, desc = "Back to where gd was pressed" })
+
+  vim.cmd("normal! m'") -- leave a jumplist entry, so <C-o> goes back
+  vim.api.nvim_win_set_buf(0, buf)
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
   return nil
 end
