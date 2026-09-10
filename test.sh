@@ -299,7 +299,7 @@ assert_match    "history: three distinct buffers" "$out" '^DISTINCT true$'
 assert_match    "history: <C-o>/<C-i> round trip"  "$out" '^TRAIL B:1 A:2 todo:1 A:2 B:1$'
 
 # --------------------------------------------------------------------------- #
-echo "== revisiting a commit reuses its buffer (and your place in it)"
+echo "== revisiting a commit just renders it again"
 # --------------------------------------------------------------------------- #
 cat > "$tmp/t.lua" <<'EOF'
 local g = require('git_sha_goto_declaration')
@@ -309,24 +309,18 @@ vim.cmd("set ft=gitrebase")
 vim.api.nvim_win_set_cursor(0, {1, 5})
 g.goto_declaration()
 local first = vim.api.nvim_get_current_buf()
-vim.api.nvim_win_set_cursor(0, {3, 0})    -- read a bit into the diff
 vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<C-o>", true, false, true), "x", false)
 
 vim.api.nvim_win_set_cursor(0, {1, 5})    -- same SHA again
 g.goto_declaration()
-print("SAME_BUF " .. tostring(first == vim.api.nvim_get_current_buf()))
-print("ROW " .. vim.api.nvim_win_get_cursor(0)[1])
-local shows = 0
-for _, b in ipairs(vim.api.nvim_list_bufs()) do
-  local ok = pcall(vim.api.nvim_buf_get_var, b, "git_sha_commit")
-  if ok then shows = shows + 1 end
-end
-print("SHOWBUFS " .. shows)
+print("FRESH_BUF " .. tostring(first ~= vim.api.nvim_get_current_buf()))
+print("OLD_ALIVE " .. tostring(vim.api.nvim_buf_is_valid(first)))
+print("FIRST " .. (vim.api.nvim_buf_get_lines(0, 0, 1, false)[1] or ""))
 EOF
 out=$(run_nvim "$repo" "$tmp/t.lua")
-assert_match    "revisit: same buffer"        "$out" '^SAME_BUF true$'
-assert_match    "revisit: no duplicate buffer" "$out" '^SHOWBUFS 1$'
-assert_match    "revisit: keeps your place"   "$out" '^ROW 3$'
+assert_match    "revisit: new buffer"      "$out" '^FRESH_BUF true$'
+assert_match    "revisit: old one is kept" "$out" '^OLD_ALIVE true$'
+assert_match    "revisit: commit header"   "$out" '^FIRST commit [0-9a-f]{40}'
 
 # --------------------------------------------------------------------------- #
 echo "== show buffers stay out of the buffer list"

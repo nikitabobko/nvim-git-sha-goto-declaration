@@ -66,16 +66,6 @@ local function git(cwd, args)
   return out, vim.v.shell_error
 end
 
---- The scratch buffer already holding this commit, if we rendered it before.
---- Commits are immutable, so an old buffer is never stale.
-local function buf_for_commit(full_sha)
-  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    local ok, sha = pcall(vim.api.nvim_buf_get_var, buf, "git_sha_commit")
-    if ok and sha == full_sha then return buf end
-  end
-  return nil
-end
-
 -- Returns nil on success, or a human-readable reason why nothing was shown.
 local function try_goto()
   local sha = sha_under_cursor()
@@ -87,19 +77,15 @@ local function try_goto()
   if show_rc ~= 0 then return "not a valid commit: " .. sha end
   local full_sha = (output[1] or ""):match("^commit (%x+)") or sha
 
-  local buf = buf_for_commit(full_sha)
-  if not buf then
-    -- Scratch, and left alive once hidden: a wiped buffer would take its
-    -- jumplist entries down with it, and those are what <C-o> / <C-i> walk.
-    buf = vim.api.nvim_create_buf(false, true)
-    vim.api.nvim_buf_set_lines(buf, 0, -1, false, output)
-    vim.bo[buf].modifiable = false
-    vim.bo[buf].filetype = "git"
-    vim.b[buf].git_sha_commit = full_sha
-    vim.b[buf].git_sha_cwd = cwd
-    pcall(vim.api.nvim_buf_set_name, buf, "git show " .. full_sha:sub(1, 12))
-    vim.keymap.set("n", "q", "<C-o>", { buffer = buf, silent = true, desc = "Back to where gd was pressed" })
-  end
+  -- Scratch, but not bufhidden=wipe: a wiped buffer would take its jumplist
+  -- entries down with it, and those are what <C-o> / <C-i> walk.
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, output)
+  vim.bo[buf].modifiable = false
+  vim.bo[buf].filetype = "git"
+  vim.b[buf].git_sha_cwd = cwd
+  pcall(vim.api.nvim_buf_set_name, buf, "git show " .. full_sha:sub(1, 12))
+  vim.keymap.set("n", "q", "<C-o>", { buffer = buf, silent = true, desc = "Back to where gd was pressed" })
 
   vim.cmd("normal! m'") -- leave a jumplist entry, so <C-o> goes back
   vim.api.nvim_win_set_buf(0, buf)

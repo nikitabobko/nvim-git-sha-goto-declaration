@@ -23,10 +23,11 @@ Use whatever is your package manager
 2. Otherwise the built-in `gd` / `<CR>` runs instead, unchanged.
 
 `<C-o>` (or `q`) and `<C-i>` walk that whole trail — commit, parent, grandparent
-and back out to the file you started from — because each commit is rendered into
-its own scratch buffer that stays alive. Revisiting a commit reuses its buffer
-rather than making a second one, and lands you where you left off reading. The
-buffers are unlisted, so they stay out of `:ls`, `:bnext` and bufferline plugins.
+and back out to the file you started from — because every `gd` renders into a new
+scratch buffer and those are kept around (a wiped buffer would take its jumplist
+entries with it). They're unlisted, so they stay out of `:ls` and `:bnext`. Look
+at the same commit twice and you get two buffers; the second shows as `[No Name]`
+since the first already took the name. Deduplicating them isn't worth the code.
 
 The repository is picked from the directory of the current buffer's file, so
 this works across repos in one Neovim session.
