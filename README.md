@@ -18,13 +18,15 @@ Use whatever is your package manager
 
 1. If the word under the cursor is a git SHA (7-40 hex chars) that resolves to a
    commit, run `git show --stat -p` and show the output in the current window,
-   like any other goto-definition. `<C-o>` (or `q`) goes back.
-   `gd` / `<CR>` work inside the diff too, so you can chase parent commits.
+   like any other goto-definition. `gd` / `<CR>` work inside the diff too, so
+   you can chase `Parent:` or any SHA mentioned in a commit message.
 2. Otherwise the built-in `gd` / `<CR>` runs instead, unchanged.
 
-The diff lives in a throwaway scratch buffer that is wiped as soon as you leave
-it, so it never piles up in your buffer list (which also means `<C-i>` won't
-bring it back — press `gd` again).
+`<C-o>` (or `q`) and `<C-i>` walk that whole trail — commit, parent, grandparent
+and back out to the file you started from — because each commit is rendered into
+its own scratch buffer that stays alive. Revisiting a commit reuses its buffer
+rather than making a second one, and lands you where you left off reading. The
+buffers are unlisted, so they stay out of `:ls`, `:bnext` and bufferline plugins.
 
 The repository is picked from the directory of the current buffer's file, so
 this works across repos in one Neovim session.

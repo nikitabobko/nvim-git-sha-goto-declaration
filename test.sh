@@ -226,12 +226,12 @@ local name2 = vim.api.nvim_buf_get_name(0)
 
 print("NAME_CHANGED " .. tostring(name1 ~= name2))
 print("WINCOUNT " .. #vim.api.nvim_list_wins())
-print("OLD_WIPED " .. tostring(not vim.api.nvim_buf_is_valid(buf1)))
+print("OLD_ALIVE " .. tostring(vim.api.nvim_buf_is_valid(buf1)))
 EOF
 out=$(run_nvim "$repo" "$tmp/t.lua")
 assert_match    "second gd: shows another commit" "$out" '^NAME_CHANGED true$'
 assert_match    "second gd: still one window"     "$out" '^WINCOUNT 1$'
-assert_match    "second gd: old buffer wiped"     "$out" '^OLD_WIPED true$'
+assert_match    "second gd: old buffer kept alive" "$out" '^OLD_ALIVE true$'
 
 # --------------------------------------------------------------------------- #
 echo "== chase: gd on the Parent: line jumps to the parent commit"
@@ -258,6 +258,90 @@ EOF
 out=$(run_nvim "$repo" "$tmp/t.lua")
 assert_match    "chase: found parent line" "$out" '^PLINE 2$'
 assert_match    "chase: shows parent commit" "$out" "^FIRST commit $parent_full"
+
+# --------------------------------------------------------------------------- #
+echo "== <C-o> / <C-i> walk the whole chain of visited commits"
+# --------------------------------------------------------------------------- #
+cat > "$tmp/t.lua" <<'EOF'
+local g = require('git_sha_goto_declaration')
+vim.cmd("edit rebase-todo")
+vim.cmd("set ft=gitrebase")
+local todo = vim.api.nvim_get_current_buf()
+
+vim.api.nvim_win_set_cursor(0, {1, 5})
+g.goto_declaration()                      -- todo -> commit A
+local a = vim.api.nvim_get_current_buf()
+vim.api.nvim_win_set_cursor(0, {2, 10})   -- the "Parent: <sha>" line
+g.goto_declaration()                      -- A -> commit B (A's parent)
+local b = vim.api.nvim_get_current_buf()
+
+local names = {[todo] = "todo", [a] = "A", [b] = "B"}
+local function where()
+  local buf = vim.api.nvim_get_current_buf()
+  return (names[buf] or "?") .. ":" .. vim.api.nvim_win_get_cursor(0)[1]
+end
+local function feed(keys)
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "x", false)
+  return where()
+end
+
+local trail = {where()}
+table.insert(trail, feed("<C-o>"))
+table.insert(trail, feed("<C-o>"))
+table.insert(trail, feed("<C-i>"))
+table.insert(trail, feed("<C-i>"))
+print("DISTINCT " .. tostring(todo ~= a and a ~= b and todo ~= b))
+print("TRAIL " .. table.concat(trail, " "))
+EOF
+out=$(run_nvim "$repo" "$tmp/t.lua")
+assert_match    "history: three distinct buffers" "$out" '^DISTINCT true$'
+# B -> back to A (on the Parent: line we jumped from) -> back to the todo, then forward again.
+assert_match    "history: <C-o>/<C-i> round trip"  "$out" '^TRAIL B:1 A:2 todo:1 A:2 B:1$'
+
+# --------------------------------------------------------------------------- #
+echo "== revisiting a commit reuses its buffer (and your place in it)"
+# --------------------------------------------------------------------------- #
+cat > "$tmp/t.lua" <<'EOF'
+local g = require('git_sha_goto_declaration')
+vim.cmd("edit rebase-todo")
+vim.cmd("set ft=gitrebase")
+
+vim.api.nvim_win_set_cursor(0, {1, 5})
+g.goto_declaration()
+local first = vim.api.nvim_get_current_buf()
+vim.api.nvim_win_set_cursor(0, {3, 0})    -- read a bit into the diff
+vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<C-o>", true, false, true), "x", false)
+
+vim.api.nvim_win_set_cursor(0, {1, 5})    -- same SHA again
+g.goto_declaration()
+print("SAME_BUF " .. tostring(first == vim.api.nvim_get_current_buf()))
+print("ROW " .. vim.api.nvim_win_get_cursor(0)[1])
+local shows = 0
+for _, b in ipairs(vim.api.nvim_list_bufs()) do
+  local ok = pcall(vim.api.nvim_buf_get_var, b, "git_sha_commit")
+  if ok then shows = shows + 1 end
+end
+print("SHOWBUFS " .. shows)
+EOF
+out=$(run_nvim "$repo" "$tmp/t.lua")
+assert_match    "revisit: same buffer"        "$out" '^SAME_BUF true$'
+assert_match    "revisit: no duplicate buffer" "$out" '^SHOWBUFS 1$'
+assert_match    "revisit: keeps your place"   "$out" '^ROW 3$'
+
+# --------------------------------------------------------------------------- #
+echo "== show buffers stay out of the buffer list"
+# --------------------------------------------------------------------------- #
+cat > "$tmp/t.lua" <<'EOF'
+vim.cmd("edit rebase-todo")
+vim.cmd("set ft=gitrebase")
+vim.api.nvim_win_set_cursor(0, {1, 5})
+require('git_sha_goto_declaration').goto_declaration()
+print("BUFLISTED " .. tostring(vim.bo.buflisted))
+print("LISTED_COUNT " .. #vim.fn.getbufinfo({buflisted = 1}))
+EOF
+out=$(run_nvim "$repo" "$tmp/t.lua")
+assert_match    "unlisted: show buffer is unlisted" "$out" '^BUFLISTED false$'
+assert_match    "unlisted: only the todo is listed" "$out" '^LISTED_COUNT 1$'
 
 # --------------------------------------------------------------------------- #
 echo "== q is mapped to go back"
