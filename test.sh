@@ -15,12 +15,18 @@ pass=0
 fail=0
 failed=()
 
+# run_nvim <cwd> <script> [pre-script]
+# The optional pre-script runs *before* plugin/*.lua, so a test can pretend the
+# user already claimed a mapping in their config.
 run_nvim() {
-  local cwd="$1" script="$2"
+  local cwd="$1" script="$2" pre="${3:-}"
+  local pre_args=()
+  [[ -n "$pre" ]] && pre_args=(-c "luafile $pre")
   (
     cd "$cwd"
     nvim --headless --clean -u NONE \
       --cmd "set rtp+=$here" \
+      "${pre_args[@]}" \
       -c "runtime! plugin/*.lua" \
       -c "luafile $script" \
       -c "qa!" 2>&1
@@ -116,7 +122,6 @@ echo "== <CR> on a SHA opens split (same behavior as gd)"
 cat > "$tmp/t.lua" <<'EOF'
 vim.cmd("edit rebase-todo")
 vim.cmd("set ft=gitrebase")
-vim.wait(50)  -- drain attach()'s vim.schedule so <CR> is mapped before feedkeys
 vim.api.nvim_win_set_cursor(0, {1, 5})
 vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "x", false)
 print("LINES_BEGIN")
@@ -269,26 +274,140 @@ out=$(run_nvim "$repo" "$tmp/t.lua")
 assert_match    "q: maps to close"       "$out" '^QRHS <[Cc]md>close<[Cc][Rr]>$'
 
 # --------------------------------------------------------------------------- #
-echo "== gd and <CR> are mapped in gitrebase / gitcommit / git filetypes"
+echo "== gd and <CR> are mapped globally, not per filetype"
 # --------------------------------------------------------------------------- #
-for ft in gitrebase gitcommit git; do
-  cat > "$tmp/t.lua" <<EOF
-vim.cmd("enew")
-vim.bo.filetype = "$ft"
-vim.cmd("doautocmd FileType $ft")
-vim.wait(50)  -- drain attach()'s vim.schedule
+cat > "$tmp/t.lua" <<'EOF'
 local gd_found, cr_found = false, false
-for _, m in ipairs(vim.api.nvim_buf_get_keymap(0, "n")) do
+for _, m in ipairs(vim.api.nvim_get_keymap("n")) do
   if m.lhs == "gd" then gd_found = true end
   if m.lhs == "<CR>" then cr_found = true end
 end
 print("GDMAP " .. tostring(gd_found))
 print("CRMAP " .. tostring(cr_found))
 EOF
-  out=$(run_nvim "$repo" "$tmp/t.lua")
-  assert_match  "ft $ft: gd is mapped"   "$out" '^GDMAP true$'
-  assert_match  "ft $ft: <CR> is mapped" "$out" '^CRMAP true$'
-done
+out=$(run_nvim "$repo" "$tmp/t.lua")
+assert_match    "global: gd is mapped"   "$out" '^GDMAP true$'
+assert_match    "global: <CR> is mapped" "$out" '^CRMAP true$'
+
+# --------------------------------------------------------------------------- #
+echo "== any buffer: gd on a SHA in a plain file opens the split"
+# --------------------------------------------------------------------------- #
+printf 'Regression introduced by %s, see the diff.\n' "$sha3" > "$repo/notes.md"
+cat > "$tmp/t.lua" <<'EOF'
+vim.cmd("edit notes.md")
+local src_ft = vim.bo.filetype
+vim.fn.search("[0-9a-f]\\{7\\}")
+vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("gd", true, false, true), "x", false)
+print("SRC_FILETYPE " .. src_ft)
+print("FIRST " .. (vim.api.nvim_buf_get_lines(0, 0, 1, false)[1] or ""))
+print("WINCOUNT " .. #vim.api.nvim_list_wins())
+print("FILETYPE " .. vim.bo.filetype)
+EOF
+out=$(run_nvim "$repo" "$tmp/t.lua")
+assert_match    "any buffer: source is markdown" "$out" '^SRC_FILETYPE markdown$'
+assert_match    "any buffer: commit header"   "$out" '^FIRST commit [0-9a-f]{40}'
+assert_match    "any buffer: split opened"    "$out" '^WINCOUNT 2$'
+assert_match    "any buffer: show ft is git"  "$out" '^FILETYPE git$'
+
+# --------------------------------------------------------------------------- #
+echo "== fallback: gd on a non-SHA word keeps its built-in meaning"
+# --------------------------------------------------------------------------- #
+printf 'int f(void) {\n  int bar = 1;\n  return bar;\n}\n' > "$repo/fallback.c"
+cat > "$tmp/t.lua" <<'EOF'
+vim.cmd("edit fallback.c")
+vim.api.nvim_win_set_cursor(0, {3, 9})  -- on "bar" in `return bar;`
+vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("gd", true, false, true), "x", false)
+print("LINE " .. vim.api.nvim_win_get_cursor(0)[1])
+print("WINCOUNT " .. #vim.api.nvim_list_wins())
+EOF
+out=$(run_nvim "$repo" "$tmp/t.lua")
+assert_match    "fallback gd: jumped to declaration" "$out" '^LINE 2$'
+assert_match    "fallback gd: no split"              "$out" '^WINCOUNT 1$'
+
+# --------------------------------------------------------------------------- #
+echo "== fallback: <CR> on a non-SHA line keeps its built-in meaning"
+# --------------------------------------------------------------------------- #
+cat > "$tmp/t.lua" <<'EOF'
+vim.cmd("edit fallback.c")
+vim.api.nvim_win_set_cursor(0, {1, 0})
+vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "x", false)
+print("LINE " .. vim.api.nvim_win_get_cursor(0)[1])
+print("WINCOUNT " .. #vim.api.nvim_list_wins())
+EOF
+out=$(run_nvim "$repo" "$tmp/t.lua")
+assert_match    "fallback <CR>: moved down" "$out" '^LINE 2$'
+assert_match    "fallback <CR>: no split"   "$out" '^WINCOUNT 1$'
+
+# --------------------------------------------------------------------------- #
+echo "== short hex words (< 7 chars) are not treated as SHAs"
+# --------------------------------------------------------------------------- #
+printf 'int f(void) {\n  int cafe = 1;\n  return cafe;\n}\n' > "$repo/short.c"
+cat > "$tmp/t.lua" <<'EOF'
+vim.cmd("edit short.c")
+local notes = {}
+vim.notify = function(msg, _) table.insert(notes, msg) end
+vim.api.nvim_win_set_cursor(0, {3, 9})  -- on "cafe"
+require('git_sha_goto_declaration').goto_declaration()
+vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("gd", true, false, true), "x", false)
+print("NOTIFY " .. (notes[1] or ""))
+print("LINE " .. vim.api.nvim_win_get_cursor(0)[1])
+print("WINCOUNT " .. #vim.api.nvim_list_wins())
+EOF
+out=$(run_nvim "$repo" "$tmp/t.lua")
+assert_match    "short hex: not a SHA"       "$out" '^NOTIFY .*no SHA under cursor'
+assert_match    "short hex: gd falls back"   "$out" '^LINE 2$'
+assert_match    "short hex: no split"        "$out" '^WINCOUNT 1$'
+
+# --------------------------------------------------------------------------- #
+echo "== outside a git repo: gd falls back instead of erroring"
+# --------------------------------------------------------------------------- #
+bare="$tmp/not-a-repo"
+mkdir -p "$bare"
+printf 'int f(void) {\n  int deadbeef = 1;\n  return deadbeef;\n}\n' > "$bare/x.c"
+cat > "$tmp/t.lua" <<'EOF'
+vim.cmd("edit x.c")
+vim.api.nvim_win_set_cursor(0, {3, 9})  -- on "deadbeef"
+vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("gd", true, false, true), "x", false)
+print("LINE " .. vim.api.nvim_win_get_cursor(0)[1])
+print("WINCOUNT " .. #vim.api.nvim_list_wins())
+EOF
+out=$(run_nvim "$bare" "$tmp/t.lua")
+assert_match    "no repo: gd falls back" "$out" '^LINE 2$'
+assert_match    "no repo: no split"      "$out" '^WINCOUNT 1$'
+
+# --------------------------------------------------------------------------- #
+echo "== a global gd from the user's config is not hijacked"
+# --------------------------------------------------------------------------- #
+cat > "$tmp/pre.lua" <<'EOF'
+vim.keymap.set("n", "gd", "<cmd>echom 'pre-existing'<cr>")
+EOF
+cat > "$tmp/t.lua" <<'EOF'
+local gd_rhs, cr_found = "", false
+for _, m in ipairs(vim.api.nvim_get_keymap("n")) do
+  if m.lhs == "gd" then gd_rhs = m.rhs or "" end
+  if m.lhs == "<CR>" then cr_found = true end
+end
+print("GDRHS " .. gd_rhs)
+print("CRMAP " .. tostring(cr_found))
+EOF
+out=$(run_nvim "$repo" "$tmp/t.lua" "$tmp/pre.lua")
+assert_match    "global guard: user gd preserved" "$out" "^GDRHS <[Cc]md>echom 'pre-existing'<[Cc][Rr]>$"
+assert_match    "global guard: <CR> still mapped" "$out" '^CRMAP true$'
+
+# --------------------------------------------------------------------------- #
+echo "== a buffer-local <CR> from another plugin wins over the global mapping"
+# --------------------------------------------------------------------------- #
+cat > "$tmp/t.lua" <<'EOF'
+vim.cmd("edit rebase-todo")
+vim.cmd("set ft=gitrebase")
+-- e.g. quickfix / fugitive / netrw, all of which map <CR> buffer-locally.
+vim.keymap.set("n", "<CR>", "<cmd>echom 'other plugin'<cr>", { buffer = true })
+vim.api.nvim_win_set_cursor(0, {1, 5})
+vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "x", false)
+print("WINCOUNT " .. #vim.api.nvim_list_wins())
+EOF
+out=$(run_nvim "$repo" "$tmp/t.lua")
+assert_match    "buffer-local wins: no split" "$out" '^WINCOUNT 1$'
 
 # --------------------------------------------------------------------------- #
 echo "== .git/sequencer/todo is auto-detected as gitrebase"
@@ -301,20 +420,15 @@ printf 'pick %s second\n' "$sha" > "$seq_repo/.git/sequencer/todo"
 
 cat > "$tmp/t.lua" <<'EOF'
 vim.cmd("edit .git/sequencer/todo")
-vim.wait(50)  -- drain attach()'s vim.schedule
-print("FILETYPE " .. vim.bo.filetype)
-local gd_found, cr_found = false, false
-for _, m in ipairs(vim.api.nvim_buf_get_keymap(0, "n")) do
-  if m.lhs == "gd" then gd_found = true end
-  if m.lhs == "<CR>" then cr_found = true end
-end
-print("GDMAP " .. tostring(gd_found))
-print("CRMAP " .. tostring(cr_found))
+local todo_ft = vim.bo.filetype
+vim.api.nvim_win_set_cursor(0, {1, 5})
+vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("gd", true, false, true), "x", false)
+print("FILETYPE " .. todo_ft)
+print("FIRST " .. (vim.api.nvim_buf_get_lines(0, 0, 1, false)[1] or ""))
 EOF
 out=$(run_nvim "$seq_repo" "$tmp/t.lua")
 assert_match    "sequencer: filetype gitrebase" "$out" '^FILETYPE gitrebase$'
-assert_match    "sequencer: gd mapped"          "$out" '^GDMAP true$'
-assert_match    "sequencer: <CR> mapped"        "$out" '^CRMAP true$'
+assert_match    "sequencer: gd shows commit"    "$out" '^FIRST commit [0-9a-f]{40}'
 
 # --------------------------------------------------------------------------- #
 echo "== root commit (no parent): shows blank parent, does not crash"
@@ -336,14 +450,13 @@ assert_match    "root: commit header"    "$out" "^commit $root_full"
 assert_match    "root: empty parent line" "$out" '^Parent: $'
 
 # --------------------------------------------------------------------------- #
-echo "== fugitive: b:fugitive_type set -> attach is a no-op (no gd / <CR> hijack)"
+echo "== fugitive: b:fugitive_type set -> attach() is a no-op"
 # --------------------------------------------------------------------------- #
 cat > "$tmp/t.lua" <<'EOF'
 vim.cmd("enew")
 vim.b.fugitive_type = "commit"  -- simulate a fugitive :G show buffer
-vim.bo.filetype = "git"
-vim.cmd("doautocmd FileType git")
-vim.wait(50)
+require('git_sha_goto_declaration').attach()
+vim.wait(50)  -- drain attach()'s vim.schedule
 local gd_found, cr_found = false, false
 for _, m in ipairs(vim.api.nvim_buf_get_keymap(0, "n")) do
   if m.lhs == "gd" then gd_found = true end
@@ -357,15 +470,13 @@ assert_match    "fugitive: gd NOT mapped"   "$out" '^GDMAP false$'
 assert_match    "fugitive: <CR> NOT mapped" "$out" '^CRMAP false$'
 
 # --------------------------------------------------------------------------- #
-echo "== guard: pre-existing buffer-local <CR> survives; gd still mapped"
+echo "== attach(): pre-existing buffer-local <CR> survives; gd still mapped"
 # --------------------------------------------------------------------------- #
 cat > "$tmp/t.lua" <<'EOF'
 vim.cmd("enew")
--- Pretend another plugin has already claimed <CR> in this buffer (e.g. fugitive
--- in a non-:G-show buffer where b:fugitive_type isn't set).
+-- Pretend another plugin has already claimed <CR> in this buffer.
 vim.keymap.set("n", "<CR>", "<cmd>echom 'pre-existing'<cr>", { buffer = true })
-vim.bo.filetype = "git"
-vim.cmd("doautocmd FileType git")
+require('git_sha_goto_declaration').attach()
 vim.wait(50)
 local gd_found, cr_rhs = false, ""
 for _, m in ipairs(vim.api.nvim_buf_get_keymap(0, "n")) do
@@ -380,13 +491,12 @@ assert_match    "guard <CR>: gd still mapped"        "$out" '^GDMAP true$'
 assert_match    "guard <CR>: pre-existing preserved" "$out" "^CRRHS <[Cc]md>echom 'pre-existing'<[Cc][Rr]>$"
 
 # --------------------------------------------------------------------------- #
-echo "== guard: pre-existing buffer-local gd survives; <CR> still mapped"
+echo "== attach(): pre-existing buffer-local gd survives; <CR> still mapped"
 # --------------------------------------------------------------------------- #
 cat > "$tmp/t.lua" <<'EOF'
 vim.cmd("enew")
 vim.keymap.set("n", "gd", "<cmd>echom 'pre-existing'<cr>", { buffer = true })
-vim.bo.filetype = "git"
-vim.cmd("doautocmd FileType git")
+require('git_sha_goto_declaration').attach()
 vim.wait(50)
 local cr_found, gd_rhs = false, ""
 for _, m in ipairs(vim.api.nvim_buf_get_keymap(0, "n")) do
