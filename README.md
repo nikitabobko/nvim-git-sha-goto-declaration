@@ -52,6 +52,16 @@ is `gitrebase`, which it doesn't detect out of the box.
 ```
 lua/git_sha_goto_declaration.lua    -- goto_declaration, handler, setup, attach
 plugin/git-sha-goto-declaration.lua -- global mappings + sequencer/todo filetype
+test.sh                             -- headless tests
+nvim.sh                             -- nvim with factory defaults + this plugin
+```
+
+`./nvim.sh` runs `nvim --clean` with only this plugin on the runtimepath, which
+is the quickest way to tell a plugin bug from a config clash:
+
+```sh
+./nvim.sh some-file
+GIT_SEQUENCE_EDITOR=/path/to/nvim.sh git rebase -i HEAD~5
 ```
 
 ## Customizing
