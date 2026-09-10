@@ -68,9 +68,11 @@ new_repo() {
   rm -rf "$dir"
   mkdir -p "$dir"
   git -C "$dir" init -q -b main
-  git -C "$dir" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "first"
-  git -C "$dir" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "second"
-  git -C "$dir" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "third"
+  git -C "$dir" config user.email t@t
+  git -C "$dir" config user.name t
+  for msg in first second third; do
+    git -C "$dir" commit -q --allow-empty -m "$msg"
+  done
 }
 
 # --------------------------------------------------------------------------- #

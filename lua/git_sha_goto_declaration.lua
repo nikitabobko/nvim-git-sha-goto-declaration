@@ -6,64 +6,33 @@ local M = {}
 local MIN_SHA_LEN = 7
 local MAX_SHA_LEN = 40
 
-local function is_hex(c)
-  return c:match("%x") ~= nil
-end
+local KEYS = { "gd", "<CR>" }
+local DESC = "Goto declaration (git SHA)"
 
-local function looks_like_sha(word)
-  return word ~= nil
-    and #word >= MIN_SHA_LEN
-    and #word <= MAX_SHA_LEN
-    and word:match("^%x+$") ~= nil
-end
-
+--- The hex run the cursor sits on, if it is SHA-shaped. A cursor one past the
+--- end of a run still counts, so `gd` works from the space after a SHA.
 local function sha_under_cursor()
   local line = vim.api.nvim_get_current_line()
-  if line == "" then return nil end
+  local col = math.min(vim.api.nvim_win_get_cursor(0)[2] + 1, #line)
 
-  local col = vim.api.nvim_win_get_cursor(0)[2] + 1
-  if col > #line then col = #line end
-
-  if not is_hex(line:sub(col, col)) then
-    if col > 1 and is_hex(line:sub(col - 1, col - 1)) then
-      col = col - 1
-    else
-      return nil
+  local from = 1
+  while true do
+    local s, e = line:find("%x+", from)
+    -- Runs are separated by a non-hex char, so at most one can contain `col`.
+    if not s or col <= e + 1 then
+      local len = s and col >= s and e - s + 1 or 0
+      return len >= MIN_SHA_LEN and len <= MAX_SHA_LEN and line:sub(s, e) or nil
     end
+    from = e + 1
   end
-
-  local s = col
-  while s > 1 and is_hex(line:sub(s - 1, s - 1)) do
-    s = s - 1
-  end
-
-  local e = col
-  while e < #line and is_hex(line:sub(e + 1, e + 1)) do
-    e = e + 1
-  end
-
-  local word = line:sub(s, e)
-  if looks_like_sha(word) then return word end
-  return nil
 end
 
+--- Where to run git: the origin repo for buffers we rendered, else the
+--- directory of the current file, else Neovim's cwd.
 local function buffer_cwd()
-  local cached = vim.b.git_sha_cwd
-  if cached and cached ~= "" then return cached end
-
-  local bufname = vim.api.nvim_buf_get_name(0)
-  if bufname == "" then return vim.fn.getcwd() end
-
-  local dir = vim.fn.fnamemodify(bufname, ":p:h")
-  if vim.fn.isdirectory(dir) == 1 then return dir end
-  return vim.fn.getcwd()
-end
-
-local function git(cwd, args)
-  local cmd = { "git", "-C", cwd }
-  vim.list_extend(cmd, args)
-  local out = vim.fn.systemlist(cmd)
-  return out, vim.v.shell_error
+  if vim.b.git_sha_cwd then return vim.b.git_sha_cwd end
+  local dir = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":p:h")
+  return vim.fn.isdirectory(dir) == 1 and dir or vim.fn.getcwd()
 end
 
 -- Returns nil on success, or a human-readable reason why nothing was shown.
@@ -73,8 +42,10 @@ local function try_goto()
 
   local cwd = buffer_cwd()
   local format = "commit %H%d%nParent: %P%nAuthor: %an <%ae>%nDate:   %ad%n%n%w(0,4,4)%B"
-  local output, show_rc = git(cwd, { "show", "--format=" .. format, "--stat", "-p", "--no-color", sha .. "^{commit}" })
-  if show_rc ~= 0 then return "not a valid commit: " .. sha end
+  local output = vim.fn.systemlist({
+    "git", "-C", cwd, "show", "--format=" .. format, "--stat", "-p", "--no-color", sha .. "^{commit}",
+  })
+  if vim.v.shell_error ~= 0 then return "not a valid commit: " .. sha end
   local full_sha = (output[1] or ""):match("^commit (%x+)") or sha
 
   -- Scratch, but not bufhidden=wipe: a wiped buffer would take its jumplist
@@ -110,32 +81,30 @@ end
 function M.handler(keys)
   return function()
     if try_goto() == nil then return end
-    local count = vim.v.count
-    local prefix = count > 0 and tostring(count) or ""
-    local rhs = prefix .. vim.api.nvim_replace_termcodes(keys, true, false, true)
-    vim.api.nvim_feedkeys(rhs, "n", false)
+    local prefix = vim.v.count > 0 and tostring(vim.v.count) or ""
+    vim.api.nvim_feedkeys(prefix .. vim.api.nvim_replace_termcodes(keys, true, false, true), "n", false)
   end
 end
 
---- The mapping that would fire for `lhs` right now, or nil. `.buffer` is 1 when
---- it is buffer-local.
-local function existing_map(lhs)
-  local m = vim.fn.maparg(lhs, "n", false, true)
-  if type(m) ~= "table" or vim.tbl_isempty(m) then return nil end
-  return m
+--- Map whichever of `gd` / `<CR>` is not already claimed at this level: a
+--- global mapping from the user's config blocks `setup()`, a buffer-local one
+--- from another plugin blocks `attach()`. `maparg` reports the mapping that
+--- would fire right now, with `.buffer == 1` when it is buffer-local.
+--- @param buf integer|nil buffer to map in, or nil for a global mapping
+local function map_keys(buf)
+  for _, lhs in ipairs(KEYS) do
+    local m = vim.fn.maparg(lhs, "n", false, true)
+    local claimed = not vim.tbl_isempty(m) and (m.buffer == 1) == (buf ~= nil)
+    if not claimed then
+      vim.keymap.set("n", lhs, M.handler(lhs), { buffer = buf, silent = true, desc = DESC })
+    end
+  end
 end
-
-local KEYS = { "gd", "<CR>" }
 
 --- Bind `gd` and `<CR>` globally, in every buffer. Keys already claimed by the
 --- user or another plugin are left alone.
 function M.setup()
-  for _, lhs in ipairs(KEYS) do
-    local m = existing_map(lhs)
-    if not m or m.buffer == 1 then
-      vim.keymap.set("n", lhs, M.handler(lhs), { silent = true, desc = "Goto declaration (git SHA)" })
-    end
-  end
+  map_keys(nil)
 end
 
 --- Bind `gd` and `<CR>` buffer-locally in the current buffer. Only needed to
@@ -145,15 +114,9 @@ function M.attach()
   if vim.b.fugitive_type ~= nil then return end
   local buf = vim.api.nvim_get_current_buf()
   vim.schedule(function()
-    if not vim.api.nvim_buf_is_valid(buf) then return end
-    vim.api.nvim_buf_call(buf, function()
-      for _, lhs in ipairs(KEYS) do
-        local m = existing_map(lhs)
-        if not m or m.buffer ~= 1 then
-          vim.keymap.set("n", lhs, M.handler(lhs), { buffer = buf, silent = true, desc = "Goto declaration (git SHA)" })
-        end
-      end
-    end)
+    if vim.api.nvim_buf_is_valid(buf) then
+      vim.api.nvim_buf_call(buf, function() map_keys(buf) end)
+    end
   end)
 end
 
