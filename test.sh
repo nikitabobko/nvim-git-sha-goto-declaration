@@ -33,6 +33,32 @@ run_nvim() {
   )
 }
 
+# Where vim-fugitive lives, if it is installed at all. The fugitive tests are
+# skipped rather than failed when it isn't -- the plugin works without it.
+fugitive=""
+for d in ~/.local/share/nvim/lazy/vim-fugitive \
+         ~/.local/share/nvim/plugged/vim-fugitive \
+         ~/.local/share/nvim/site/pack/*/*/vim-fugitive \
+         ~/.vim/plugged/vim-fugitive \
+         ~/.vim/pack/*/*/vim-fugitive; do
+  [[ -f "$d/plugin/fugitive.vim" ]] && { fugitive="$d"; break; }
+done
+
+# run_fugitive <cwd> <script> -- like run_nvim, with fugitive on the runtimepath.
+run_fugitive() {
+  local cwd="$1" script="$2"
+  (
+    cd "$cwd"
+    nvim --headless --clean -u NONE \
+      --cmd "set rtp+=$fugitive" \
+      --cmd "set rtp+=$here" \
+      -c "runtime! plugin/*.vim" \
+      -c "runtime! plugin/*.lua" \
+      -c "luafile $script" \
+      -c "qa!" 2>&1
+  )
+}
+
 assert_match() {
   local name="$1" output="$2" pattern="$3"
   if printf '%s\n' "$output" | grep -qE "$pattern"; then
@@ -592,6 +618,87 @@ EOF
 out=$(run_nvim "$repo" "$tmp/t.lua")
 assert_match    "guard gd: <CR> still mapped"        "$out" '^CRMAP true$'
 assert_match    "guard gd: pre-existing preserved"   "$out" "^GDRHS <[Cc]md>echom 'pre-existing'<[Cc][Rr]>$"
+
+# --------------------------------------------------------------------------- #
+echo "== vim-fugitive: :Git ++curwin show, in the same window"
+# --------------------------------------------------------------------------- #
+if [[ -z "$fugitive" ]]; then
+  echo "  SKIP vim-fugitive not installed"
+else
+  repo="$tmp/fug"
+  new_repo "$repo"
+  sha3=$(git -C "$repo" rev-parse --short HEAD)
+  printf 'pick %s third\n' "$sha3" > "$repo/rebase-todo"
+
+  cat > "$tmp/t.lua" <<'EOF'
+vim.cmd("edit rebase-todo")
+local todo_win = vim.api.nvim_get_current_win()
+local todo_buf = vim.api.nvim_get_current_buf()
+-- Collect, then print once at the end: a print() interleaved with feedkeys()
+-- comes back out of headless nvim without its newline.
+local R = {}
+local function say(s) R[#R + 1] = s end
+local function line1() return vim.api.nvim_buf_get_lines(0, 0, 1, false)[1] end
+local function keys(k)
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(k, true, false, true), "x", false)
+end
+vim.api.nvim_win_set_cursor(0, {1, 5})
+say("SHOWED " .. tostring(require('git_sha_goto_declaration').goto_declaration()))
+say("WINCOUNT " .. #vim.api.nvim_list_wins())
+say("SAME_WIN " .. tostring(todo_win == vim.api.nvim_get_current_win()))
+say("FUGTYPE " .. tostring(vim.b.fugitive_type))
+say("FILETYPE " .. vim.bo.filetype)
+say("L1 " .. line1())
+say("L2 " .. vim.api.nvim_buf_get_lines(0, 1, 2, false)[1])
+-- fugitive keeps its own <CR> (jump to the file under the cursor) in its buffers
+say("CR_IS_FUGITIVES " .. tostring(vim.fn.maparg("<CR>", "n", false, true).buffer == 1))
+-- chase the Parent: SHA from inside the fugitive buffer, then walk back out
+vim.api.nvim_win_set_cursor(0, {2, 10})
+keys("gd")
+say("PARENT_L1 " .. line1())
+say("PARENT_WINCOUNT " .. #vim.api.nvim_list_wins())
+keys("<C-o>")
+say("BACK1_L1 " .. line1())
+keys("<C-o>")
+say("BACK2_IS_TODO " .. tostring(vim.api.nvim_get_current_buf() == todo_buf))
+keys("<C-i>")
+say("FWD_IS_COMMIT " .. tostring(vim.b.fugitive_type ~= nil))
+for _, l in ipairs(R) do print(l) end
+EOF
+  out=$(run_fugitive "$repo" "$tmp/t.lua")
+  parent=$(git -C "$repo" rev-parse HEAD~1)
+  head_full=$(git -C "$repo" rev-parse HEAD)
+  assert_match "fugitive: reported success"     "$out" '^SHOWED true$'
+  assert_match "fugitive: no new window"        "$out" '^WINCOUNT 1$'
+  assert_match "fugitive: reuses the window"    "$out" '^SAME_WIN true$'
+  assert_match "fugitive: fugitive owns buffer" "$out" '^FUGTYPE temp$'
+  assert_match "fugitive: filetype is git"      "$out" '^FILETYPE git$'
+  assert_match "fugitive: our --format survived" "$out" "^L1 commit $head_full"
+  assert_match "fugitive: Parent header kept"   "$out" "^L2 Parent: $parent"
+  assert_match "fugitive: <CR> left to fugitive" "$out" '^CR_IS_FUGITIVES true$'
+  assert_match "fugitive: gd chases the parent" "$out" "^PARENT_L1 commit $parent"
+  assert_match "fugitive: parent in same window" "$out" '^PARENT_WINCOUNT 1$'
+  assert_match "fugitive: <C-o> back to commit" "$out" "^BACK1_L1 commit $head_full"
+  assert_match "fugitive: <C-o> back to todo"   "$out" '^BACK2_IS_TODO true$'
+  assert_match "fugitive: <C-i> forward again"  "$out" '^FWD_IS_COMMIT true$'
+
+  # A hex word that is not a commit must leave the window alone, fugitive or not.
+  cat > "$tmp/t.lua" <<'EOF'
+vim.cmd("edit rebase-todo")
+vim.api.nvim_set_current_line("pick deadbeef nope")
+local notes = {}
+vim.notify = function(msg, _) table.insert(notes, msg) end
+vim.api.nvim_win_set_cursor(0, {1, 5})
+require('git_sha_goto_declaration').goto_declaration()
+print("NOTIFY " .. (notes[1] or ""))
+print("WINCOUNT " .. #vim.api.nvim_list_wins())
+print("FUGTYPE " .. tostring(vim.b.fugitive_type))
+EOF
+  out=$(run_fugitive "$repo" "$tmp/t.lua")
+  assert_match "fugitive: invalid SHA warns"        "$out" '^NOTIFY .*not a valid commit: deadbeef'
+  assert_match "fugitive: invalid opens no window"  "$out" '^WINCOUNT 1$'
+  assert_match "fugitive: invalid leaves buffer"    "$out" '^FUGTYPE nil$'
+fi
 
 # --------------------------------------------------------------------------- #
 echo

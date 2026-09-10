@@ -8,6 +8,12 @@ local MAX_SHA_LEN = 40
 
 local KEYS = { "gd", "<CR>" }
 local DESC = "Goto declaration (git SHA)"
+local BACK_DESC = "Back to where gd was pressed"
+
+-- The headers git show doesn't print by default. `Parent:` is the one that
+-- earns its keep: it makes the commit above this one just another `gd` away.
+local FORMAT = "commit %H%d%nParent: %P%nAuthor: %an <%ae>%nDate:   %ad%n%n%w(0,4,4)%B"
+local SHOW_ARGS = { "--format=" .. FORMAT, "--stat", "-p", "--no-color" }
 
 --- The hex run the cursor sits on, if it is SHA-shaped. A cursor one past the
 --- end of a run still counts, so `gd` works from the space after a SHA.
@@ -27,12 +33,58 @@ local function sha_under_cursor()
   end
 end
 
---- Where to run git: the origin repo for buffers we rendered, else the
---- directory of the current file, else Neovim's cwd.
+--- Where to run git: the origin repo for buffers we rendered, fugitive's repo
+--- for its buffers, else the directory of the current file, else Neovim's cwd.
+--- b:git_dir points at the .git directory rather than the work tree, which is
+--- fine -- git discovers the repo from inside it, linked worktrees included.
+--- Without this a fugitive buffer would resolve to Neovim's temp directory,
+--- and chasing a Parent: SHA out of one would find no repo at all.
 local function buffer_cwd()
-  if vim.b.git_sha_cwd then return vim.b.git_sha_cwd end
+  local repo = vim.b.git_sha_cwd or vim.b.git_dir
+  if repo then return repo end
   local dir = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":p:h")
   return vim.fn.isdirectory(dir) == 1 and dir or vim.fn.getcwd()
+end
+
+--- Show the commit through vim-fugitive, so it lands in a real fugitive buffer
+--- with fugitive's own navigation (`<CR>` on a diff line opens that file) and
+--- the repo attached, which is what lets `gd` keep chasing SHAs from there.
+--- `++curwin` is fugitive's documented opt-out of the :split it does by default
+--- for pager commands like show. Returns false when fugitive isn't installed,
+--- or when it refused the command and our own buffer should take over.
+local function show_with_fugitive(sha)
+  if vim.fn.exists(":Git") ~= 2 then return false end
+
+  -- :Git expands its arguments the way :edit does, so the `%` placeholders in
+  -- --format= would come back as the current file name, and its spaces would
+  -- split one argument into eight. Escaping is what keeps FORMAT intact.
+  local args = {}
+  for _, arg in ipairs(SHOW_ARGS) do
+    args[#args + 1] = (arg:gsub("[%%#\\ ]", "\\%0"))
+  end
+  -- The buffer is fugitive's from here on: no `q` alias, no mappings of ours.
+  -- Fugitive rebuilds its temp buffers as you navigate back into them, which
+  -- drops anything we add; `<C-o>` is the trail that survives, and `<CR>` is
+  -- better spent on fugitive's own jump-to-file than on ours.
+  return pcall(vim.cmd, table.concat({ "Git ++curwin show", table.concat(args, " "), sha }, " "))
+end
+
+--- Render the commit ourselves, for when fugitive isn't around.
+local function show_in_scratch(cwd, sha)
+  local cmd = { "git", "-C", cwd, "show" }
+  vim.list_extend(cmd, SHOW_ARGS)
+  cmd[#cmd + 1] = sha
+
+  -- Scratch, but not bufhidden=wipe: a wiped buffer would take its jumplist
+  -- entries down with it, and those are what <C-o> / <C-i> walk.
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.fn.systemlist(cmd))
+  vim.bo[buf].modifiable = false
+  vim.bo[buf].filetype = "git"
+  vim.b[buf].git_sha_cwd = cwd
+  pcall(vim.api.nvim_buf_set_name, buf, "git show " .. sha:sub(1, 12))
+  vim.keymap.set("n", "q", "<C-o>", { buffer = buf, silent = true, desc = BACK_DESC })
+  vim.api.nvim_win_set_buf(0, buf)
 end
 
 -- Returns nil on success, or a human-readable reason why nothing was shown.
@@ -40,26 +92,16 @@ local function try_goto()
   local sha = sha_under_cursor()
   if not sha then return "no SHA under cursor" end
 
+  -- Resolve before showing anything: on a hex word that is not a commit, `gd`
+  -- has to fall through to its built-in meaning with the window untouched.
   local cwd = buffer_cwd()
-  local format = "commit %H%d%nParent: %P%nAuthor: %an <%ae>%nDate:   %ad%n%n%w(0,4,4)%B"
-  local output = vim.fn.systemlist({
-    "git", "-C", cwd, "show", "--format=" .. format, "--stat", "-p", "--no-color", sha .. "^{commit}",
-  })
-  if vim.v.shell_error ~= 0 then return "not a valid commit: " .. sha end
-  local full_sha = (output[1] or ""):match("^commit (%x+)") or sha
-
-  -- Scratch, but not bufhidden=wipe: a wiped buffer would take its jumplist
-  -- entries down with it, and those are what <C-o> / <C-i> walk.
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, output)
-  vim.bo[buf].modifiable = false
-  vim.bo[buf].filetype = "git"
-  vim.b[buf].git_sha_cwd = cwd
-  pcall(vim.api.nvim_buf_set_name, buf, "git show " .. full_sha:sub(1, 12))
-  vim.keymap.set("n", "q", "<C-o>", { buffer = buf, silent = true, desc = "Back to where gd was pressed" })
+  local full_sha = vim.fn.systemlist({
+    "git", "-C", cwd, "rev-parse", "--verify", "--quiet", sha .. "^{commit}",
+  })[1]
+  if vim.v.shell_error ~= 0 or not full_sha then return "not a valid commit: " .. sha end
 
   vim.cmd("normal! m'") -- leave a jumplist entry, so <C-o> goes back
-  vim.api.nvim_win_set_buf(0, buf)
+  if not show_with_fugitive(sha) then show_in_scratch(cwd, full_sha) end
   return nil
 end
 

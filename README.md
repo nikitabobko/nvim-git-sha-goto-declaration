@@ -18,19 +18,43 @@ Use whatever is your package manager
 
 1. If the word under the cursor is a git SHA (7-40 hex chars) that resolves to a
    commit, run `git show --stat -p` and show the output in the current window,
-   like any other goto-definition. `gd` / `<CR>` work inside the diff too, so
-   you can chase `Parent:` or any SHA mentioned in a commit message.
+   like any other goto-definition. `gd` works inside the diff too, so you can
+   chase `Parent:` or any SHA mentioned in a commit message.
 2. Otherwise the built-in `gd` / `<CR>` runs instead, unchanged.
 
-`<C-o>` (or `q`) and `<C-i>` walk that whole trail — commit, parent, grandparent
+## With vim-fugitive
+
+If [vim-fugitive](https://github.com/tpope/vim-fugitive) is installed, step 1
+hands off to it: `:Git ++curwin show --stat -p <sha>`. You get a real fugitive
+buffer, with fugitive's own maps — notably `<CR>`, which jumps to the file under
+the cursor in the diff — and the repository attached, so `gd` keeps chasing SHAs
+from there. `++curwin` is fugitive's documented opt-out of the `:split` it does
+by default for pager commands like `show`, so the commit still replaces the
+current window rather than opening a new one.
+
+Two differences from the built-in buffer, both deliberate:
+
+- `<CR>` is fugitive's, not ours. It's more useful on a diff line than a second
+  copy of `gd`.
+- `q` is not mapped. Fugitive rebuilds its temp buffers as you navigate back
+  into them, which drops anything the plugin adds; `<C-o>` is the trail that
+  survives.
+
+Nothing needs configuring — fugitive is detected at keypress time, so
+lazy-loading it is fine, and if `:Git` fails for any reason the plugin falls
+back to rendering the commit itself.
+
+`<C-o>` (or `q`, without fugitive) and `<C-i>` walk that whole trail — commit, parent, grandparent
 and back out to the file you started from — because every `gd` renders into a new
 scratch buffer and those are kept around (a wiped buffer would take its jumplist
 entries with it). They're unlisted, so they stay out of `:ls` and `:bnext`. Look
 at the same commit twice and you get two buffers; the second shows as `[No Name]`
 since the first already took the name. Deduplicating them isn't worth the code.
+With fugitive, its temp buffers do this job instead.
 
-The repository is picked from the directory of the current buffer's file, so
-this works across repos in one Neovim session.
+The repository is picked from `b:git_dir` when something set it (fugitive does,
+for its buffers and for ordinary files in a repo), otherwise from the directory
+of the current buffer's file — so this works across repos in one Neovim session.
 
 ## Mappings
 
@@ -76,9 +100,10 @@ g.setup()             -- map gd / <CR> globally (already called by plugin/)
 g.attach()            -- map gd / <CR> buffer-locally in the current buffer
 ```
 
-To open the diff in a split instead of the current window, add a `vim.cmd("vsplit")`
-before `nvim_win_set_buf` in `lua/git_sha_goto_declaration.lua`. The minimum SHA
-length is `MIN_SHA_LEN` in the same file.
+To open the diff in a split instead of the current window, drop the `++curwin`
+from the `:Git` command and add a `vim.cmd("vsplit")` before `nvim_win_set_buf`,
+both in `lua/git_sha_goto_declaration.lua`. The minimum SHA length is
+`MIN_SHA_LEN` and the `git show` arguments are `SHOW_ARGS`, in the same file.
 
 ## Code quality
 
